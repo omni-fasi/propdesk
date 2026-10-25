@@ -1,0 +1,131 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* Design tokens — MONOCHROME UI. The interface is black / white / grays only.
+   Color is reserved for trading semantics: profit/buy/up candles (green), loss/sell/down candles (red),
+   and rule warnings (amber). Primary actions are white with black text (bg-accent text-accent-fg).
+   Use through Tailwind utilities: bg-panel, text-muted, border-line, text-profit, bg-loss/10 … */
+@theme {
+  --color-bg: #000000;
+  --color-panel: #0b0b0b;
+  --color-panel-2: #121212;
+  --color-panel-3: #1a1a1a;
+  --color-line: #1f1f1f;
+  --color-line-strong: #2e2e2e;
+  --color-fg: #f2f2f2;
+  --color-muted: #a3a3a3;
+  --color-faint: #6b6b6b;
+  /* "accent" is white: primary buttons, active nav, focus, selection. Text on it: accent-fg. */
+  --color-accent: #f5f5f5;
+  --color-accent-strong: #ffffff;
+  --color-accent-fg: #0a0a0a;
+  --color-profit: #1fc773;
+  --color-profit-strong: #16a862;
+  --color-loss: #f23645;
+  --color-loss-strong: #d42a38;
+  --color-warn: #f5a524;
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
+  --shadow-pop: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --animate-flash-up: flash-up 700ms ease-out;
+  --animate-flash-down: flash-down 700ms ease-out;
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-slide-in-right: slide-in-right 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+
+  @keyframes flash-up {
+    0% { background-color: rgb(31 199 115 / 0.26); }
+    100% { background-color: transparent; }
+  }
+  @keyframes flash-down {
+    0% { background-color: rgb(242 54 69 / 0.26); }
+    100% { background-color: transparent; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slide-in-right {
+    from { transform: translateX(24px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    color-scheme: dark;
+    background: var(--color-bg);
+  }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    overflow: hidden;
+  }
+  ::selection {
+    background: rgb(255 255 255 / 0.22);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2e2e2e transparent;
+  }
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+  :focus-visible {
+    outline: 2px solid rgb(255 255 255 / 0.55);
+    outline-offset: 1px;
+  }
+}
+
+/* Numbers: tabular figures so live values don't jitter. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum', 'cv11';
+}
+/* Monospace numbers for prices / ladders. */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+@utility scroll-thin {
+  scrollbar-width: thin;
+}
