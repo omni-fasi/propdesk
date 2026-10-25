@@ -139,6 +139,17 @@ If delay ≥ 60 s, **shift all timestamps of that feed (quotes, live candles, hi
 delay** so the data plays as if live, and report `FeedStatus.delaySec`. The engine and charts then
 see one consistent "now".
 
+### Live proxies (CME futures)
+A delayed feed with a `liveProxy` (NQ=F ← Binance QQQUSDT, ES=F ← SPYUSDT, RTY=F ← IWMUSDT,
+CL=F ← CLUSDT, GC=F ← XAUUSDT) is not time-shifted. Its price is the proxy's mid × a ratio: the median
+of `feed close / proxy close` over the last 15 minutes both have (refit every minute while the market
+is open; after a weekend the last session's minutes). Delayed ticks only anchor (ratio, delay,
+reference price); quotes and live bars come from the proxy and only while the CME session is open.
+History keeps the feed's real bars at their real times; the ~10 minutes it does not have yet are
+proxy bars scaled by the ratio (volume 0). Measured error vs. the real CME price (5 days of 1m
+closes): NQ median ~2 pts (p90 ~5), ES ~0.5, RTY ~0.6, GC ~0.25, CL ~1 tick. The Dow (DIA) tracks
+too poorly and YM/MYM were removed.
+
 ### Candles
 - `onCandle` emits live **1m** bars for retained symbols (Binance kline stream; Yahoo: aggregated from
   ticks, volume from `dayVolume` deltas).
@@ -178,19 +189,26 @@ accounts that hold positions or working orders in that symbol. The engine retain
 - **Stop** (stop-market): trigger — `bidask`: buy when `ask ≥ stop`, sell when `bid ≤ stop`;
   `last`: on last. Fills at the **current** ask/bid after trigger (so gaps cause slippage). Taker fee.
 - Rounding: prices to tick, quantities floored to qtyStep; reject qty < minQty or off-step.
-- Commissions per `spec.commission` (`commissionFor` in shared/risk.ts) on every fill.
-- **Netting**: one position per (account, symbol). A fill against the position reduces it and realizes
-  P&L on the closed part (FIFO not needed — average price); if it crosses zero the remainder opens a
-  new position at the fill price (flip). Avg price updates on adds.
-- **Brackets live on the position**: `Position.sl` (stop-market for the whole position) and
-  `Position.tp` (limit for the whole position). An entry order may carry `sl`/`tp`; on fill they
-  replace the position's bracket. A flip clears the old bracket and applies the new order's.
-  SL/TP trigger like stop/limit exit orders for the full current size; fill = role `stop_loss` /
-  `take_profit`. Closing the position clears them. Partial closes keep them.
+- Commissions per `spec.commission` (`commissionFor` in shared/risk.ts) on every fill — except practice accounts with `rules.fees = 'off'` (switch on the account card / practice form; `PATCH /accounts/:id {fees}` is refused for challenge accounts), which pay none (`accountCommission`).
+- **Several positions per symbol** (schema v5: a position is keyed by its trade id). Every entry opens a
+  position of its own — never merged into an existing one — with its own entry price, `sl`/`tp`, trade and
+  P&L. A symbol's positions are always on the same side: an order the other way closes them **oldest first**
+  (FIFO; a partial close keeps the bracket), and what is left opens a new position on the other side (flip:
+  the closed trades get exit reason `reversal`). One execution writes one fill per position it touches,
+  the commission split by qty (`splitFee`), so every fill belongs to exactly one trade.
+- **Brackets live on each position**: `Position.sl` (stop-market for that position's size) and `Position.tp`
+  (limit for its size). An entry order may carry `sl`/`tp`; they become the new position's bracket. When one
+  triggers, only that position closes (role `stop_loss` / `take_profit`). `PATCH /positions/bracket` with a
+  `tradeId` changes one position, without one every position of the symbol (it returns the changed ones).
+- `POST /positions/close` with a `tradeId` closes (or partially closes, `qty`) that position; without one it
+  closes the symbol's positions oldest first. Rules (margin, max contracts, reduce-only caps) look at a
+  symbol's positions together — they are on one side, so their sizes add up.
+- Discipline: positions closed by one execution count as one result for the losing streak; each closed
+  position counts as a trade for max trades per day.
 - Working limit/stop orders that would *reduce* a position are allowed; `reduceOnly` orders are capped
   to the position size and cancelled when the position is flat.
 - `modify` on working orders: price/qty/sl/tp. `cancel`. `flatten account` = cancel all + close all.
-- `reverse` = market order of 2× position size in the opposite direction (one fill, one flip).
+- `reverse` = market order of 2× the symbol's total size in the opposite direction: closes all its positions, opens one on the other side.
 
 ### Validation (reject with ApiError code)
 - account must exist, be `active` (`passed`/`failed`/`closed` → `account_closed`).
@@ -201,15 +219,15 @@ accounts that hold positions or working orders in that symbol. The engine retain
 - instrument class not in `rules.allowedClasses` → `rule_violation`.
 - position limit: Σ mini-equivalents of all futures positions after the fill > `maxContracts` →
   `rule_violation` ("Max position size is 5 contracts (50 micros)").
-- margin: Σ |notional| / leverage[class] after the fill > equity → `insufficient_margin`.
-- `settings.requireStopLoss` and an entry without sl → `stop_required`.
+- margin: Σ |notional| / leverage[class] after the fill > equity → `insufficient_margin` (message names the largest position the account can hold in that symbol: (equity − other positions' margin) × leverage).
+- `settings.requireStopLoss` and an entry without sl → `stop_required` (every entry opens its own position, so every entry needs its own stop).
 - invalid bracket (`validateBracket`) → `invalid`.
 - Order affecting a position that is currently being liquidated → `busy`.
 
 ### Position marks & trades
 - Mark longs at **bid**, shorts at **ask** (`Position.markPrice`, `openPnl` exclude exit fees).
 - Equity = balance + Σ openPnl.
-- `Trade` = flat→flat round trip (see types). Update `mae`/`mfe` on every quote (persist at most every
+- `Trade` = one position from open to close (see types). Update `mae`/`mfe` on every quote (persist at most every
   few seconds while open; always on close). `initialStop` = position SL right after the opening fill
   (or the first SL set within 10 s of opening); `riskAmount`, `rMultiple = netPnl / riskAmount`.
   `exitReason` from the closing fill's role/context. `tags` come from the opening order's tags (later
@@ -221,6 +239,11 @@ accounts that hold positions or working orders in that symbol. The engine retain
 - `DailyStat` per (account, trading day): created at the first activity or rollover; tracks start/end
   balance, gross, fees, net, trades/wins/losses (closed trades by close day), fills, high/low equity,
   flags. Days without activity need no row. The calendar shows `netPnl`.
+- Day flags record what happened that day and stay after a lock is over: `breach`, `daily_loss`, `tilt`,
+  `locked` (max trades / personal daily stop), `break` (voluntary), `passed`, `payout`. A lock's flag follows
+  from its reason (`LOCK_FLAGS`). The calendar's day drawer shows when each lock was in force, from the
+  day's `locked` events (`GET /events?from&before`). Schema v3 re-flagged days whose `locked` came only from
+  a break.
 - Equity points: every 60 s for accounts with open positions, plus on every fill (table `equity`).
 
 ---
@@ -287,7 +310,7 @@ On pass: cancel orders, `status = 'passed'`, `endReason = 'Profit target reached
   until: now + cooldownMinutes}`; event `locked` (warning) "3 losses in a row — 15 minute cooldown".
 - `maxTradesPerDay` closed trades → lock until rollover (`max_trades`).
 - `personalDailyLoss`: day net ≤ −X → flatten + lock until rollover (`personal_loss_limit`).
-- Voluntary break `POST /accounts/:id/break {minutes}` → lock `break`.
+- Voluntary break `POST /accounts/:id/break {minutes}` → lock `break`, day flag `break` (not `locked`).
 - Locks are never removable by the client before they expire. Expired locks are cleared by the
   scheduler (event `unlocked`).
 - Revenge guard is UI-side (warning only).
@@ -315,6 +338,41 @@ Single wallet (the trader's personal "prop budget"). Onboarding deposits an init
 Indices on (account_id, ts) / (account_id, day). Schema migrations by version number.
 Everything the UI shows must survive a restart. Startup: load state → reconcile gap since
 `last_processed_ts` (section 8) → process missed rollovers → resume live.
+
+**Trade replay** (schema v2): `ticks` (symbol, ts, bid, ask) is written by `server/src/replay/recorder.ts`
+— every quoted symbol is sampled every 250 ms when bid/ask moved, the last 10 min are kept in memory and
+written once a position opens in that symbol, then live until 3 min after it closes; 120-day retention.
+`trade_brackets` (trade_id, ts, sl, tp) gets a row whenever a position's stop / target changes
+(`recordBracket` in the engine). `GET /trades/:id/replay` (`server/src/replay/build.ts`) returns the trade,
+its fills, its bracket history (inferred from the initial stop / take-profit fill for older trades) and the
+price path over a window of 3–10 min before the entry to 1–5 min after the exit: recorded ticks when they
+cover the trade, else Binance aggTrades sampled to 250 ms (windows ≤ 2 h), else 1-minute bars. The web
+player (`web/src/features/journal/TradeReplay.tsx`, model in `shared/replay.ts`) builds bars of 5 s–5 min
+from that path and replays position, P&L, worst / best and the brackets at any moment.
+
+**Chart drawings** (schema v4): `drawings` (id, symbol, kind, points JSON, tp, sl, created_at, updated_at),
+per symbol, shown on every timeframe. Kinds: `trendline` / `rect` (2 points), `hline` / `hray` (1 point),
+`long` / `short` (entry point + right edge, with `tp` / `sl` on their own side of the entry). Points are
+(unix seconds, price). `GET /drawings?symbol`, `PUT /drawings/:id` (create or replace; the client makes the
+id), `DELETE /drawings/:id` (idempotent), `DELETE /drawings?symbol`; at most 500 per symbol; validation in
+`server/src/engine/drawings.ts`. Client: `web/src/features/trade/chart/drawings/` — a series primitive paints
+them (`render.ts`), `layer.ts` turns pointer gestures into drawings through the controller's
+`ChartInteraction` hook (an armed tool gets presses first; otherwise price lines first, then drawings), the
+store saves optimistically. Times map to bar indexes with `shared/drawings.ts` (gaps snap to the next bar;
+outside the loaded bars it extrapolates by the timeframe).
+
+**Order book heatmap** (schema v6): `book_rows` (symbol, t = minute start in seconds, step, bids JSON, asks
+JSON), kept 24 h. Binance markets only (Yahoo has no order book). `server/src/market/depth.ts` keeps a local
+book per symbol from a REST snapshot (`/fapi/v1/depth?limit=1000`) plus the `<feed>@depth@500ms` diff stream
+on the /public route (Binance's sync procedure: drop events older than the snapshot, then `pu` must equal the
+previous `u`, else snapshot again; levels past the snapshot appear as they change). Each second the book is
+bucketed (step ≈ 0.01 % of the price, a round number of ticks) within ±1.5 % of the mid: pushed to watching
+clients (WS `book` → `{type:'book', frame}`), and averaged per minute into a row (WS `book_row`; buckets under
+0.2 % of the row's largest are dropped). Watchlist symbols are recorded all the time, others while watched
+(≤ 12 symbols). `GET /book?symbol&from&to` (seconds) serves the rows. Client: `web/src/features/trade/chart/book/`
+— a series primitive draws the minutes behind the candles (green bids, red asks, brightness relative to the
+visible cells' 97th percentile; columns under 2 px merge) and the live book as depth bars on the right edge
+with the three biggest walls per side labelled; toggled from the chart header (remembered per browser).
 
 ---
 
@@ -376,7 +434,8 @@ bus), `web/src/store/*` (zustand), `web/src/components/ui/*` (primitives), `web/
 1. **Trade** (`/trade`) — the terminal. Account header (balance, equity, open P&L, day P&L, max-loss
    buffer meter, daily-loss buffer meter, target progress, lock state), watchlist, chart (candles +
    volume, timeframes, position/SL/TP/working-order lines that can be **dragged** to modify, fill
-   markers, live last bar), order ticket (market/limit/stop, qty or **risk-$ sizing**, SL/TP in price /
+   markers, live last bar, drawing tools with a magnet, the price source and its TradingView symbol),
+   order ticket (market/limit/stop, qty or **risk-$ sizing**, SL/TP in price /
    ticks / $, live risk & reward in $ + % of buffer + R:R + work-hours, big Buy (ask) / Sell (bid)
    buttons, flatten, reverse, mood/setup check-in, confirmation per settings), bottom tabs (positions,
    working orders, fills, today's trades, account events).
@@ -396,8 +455,10 @@ bus), `web/src/store/*` (zustand), `web/src/components/ui/*` (primitives), `web/
    (hourly wage, sounds, volume, notifications), watchlist, data feed status.
 
 ### Cross-cutting realism layer (realism-ui agent, mounted once in App)
-- Sounds (WebAudio-synthesized, no assets): order placed, fill, stop hit, target hit, warning, breach,
-  pass, lock.
+- Sounds, TradingView's way (`web/src/lib/sounds.ts`): every fill plays `settings.fillSound` (the "Order
+  filled" voice clip or one of TradingView's 8 execution sounds); account alerts (warning, breach, pass, lock,
+  unlock, auto-flatten, payout) play `settings.alertSound` (a TradingView alert sound, null = silent). Placing,
+  modifying, cancelling and rejecting orders is silent. One sound at a time, like TradingView.
 - Full-screen moments: breach ("ACCOUNT FAILED", fee lost, stats), pass (celebration + next steps),
   lock overlay with countdown + reflection prompt (saved as day note), catch-up summary.
 - Post-trade review prompt after a trade closes (followed plan? rating, mistakes, mood after).

@@ -13,6 +13,8 @@ export interface ToastInput {
   tone?: ToastTone;
   /** ms; 0 = sticky. Default 4500. */
   duration?: number;
+  /** Optional button; the toast closes after it is clicked. */
+  action?: { label: string; onClick: () => void };
 }
 
 interface ToastItem extends ToastInput {
@@ -57,6 +59,17 @@ export function Toaster() {
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium text-fg">{t.title}</div>
             {t.description && <div className="mt-0.5 text-xs text-muted">{t.description}</div>}
+            {t.action && (
+              <button
+                className="mt-1.5 text-xs font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg"
+                onClick={() => {
+                  t.action?.onClick();
+                  dismissToast(t.id);
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
           <button className="-mr-1 shrink-0 self-start text-faint hover:text-fg" onClick={() => dismissToast(t.id)} aria-label="Dismiss">
             <X size={14} />

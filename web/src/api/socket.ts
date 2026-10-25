@@ -5,6 +5,18 @@ import type { ClientMessage, ServerMessage } from '@shared/api';
 import { useApp } from '@/store/app';
 import { bus } from './bus';
 
+/** After a reconnect (e.g. the service restarted after an update), reload if a newer web build is being served. */
+async function reloadIfNewBuild(): Promise<void> {
+  try {
+    const html = await (await fetch('/', { cache: 'no-store' })).text();
+    const served = html.match(/src="(\/assets\/index-[^"]+\.js)"/)?.[1];
+    const running = [...document.scripts].map((s) => s.getAttribute('src')).find((src) => src?.startsWith('/assets/index-'));
+    if (served && running && served !== running) location.reload();
+  } catch {
+    // Offline or dev server: nothing to do.
+  }
+}
+
 class Socket {
   private ws: WebSocket | null = null;
   private retries = 0;
@@ -15,6 +27,7 @@ class Socket {
   /** Quote interest per owner (component); the union is sent to the server. */
   private owners = new Map<string, string[]>();
   private chartSymbol: string | null = null;
+  private bookSymbol: string | null = null;
   private sentSymbols = '';
   latencyMs: number | null = null;
 
@@ -30,8 +43,10 @@ class Socket {
       bus.emit('connection', { connected: true });
       this.flushSubscriptions();
       this.send({ type: 'chart', symbol: this.chartSymbol });
+      if (this.bookSymbol) this.send({ type: 'book', symbol: this.bookSymbol });
       this.startPing();
       if (this.everOpened) {
+        void reloadIfNewBuild();
         useApp
           .getState()
           .bootstrap()
@@ -69,6 +84,12 @@ class Socket {
       case 'candle':
         bus.emit('candle', { symbol: msg.symbol, candle: msg.candle });
         break;
+      case 'book':
+        bus.emit('book', msg.frame);
+        break;
+      case 'book_row':
+        bus.emit('bookRow', { symbol: msg.symbol, row: msg.row });
+        break;
       case 'fill':
         bus.emit('fill', msg.fill);
         break;
@@ -86,7 +107,7 @@ class Socket {
         bus.emit('position', msg.position);
         break;
       case 'position_closed':
-        bus.emit('positionClosed', { accountId: msg.accountId, symbol: msg.symbol });
+        bus.emit('positionClosed', { accountId: msg.accountId, symbol: msg.symbol, tradeId: msg.tradeId });
         break;
       case 'snapshot':
         bus.emit('snapshot', msg.snapshot);
@@ -144,6 +165,13 @@ class Socket {
     this.chartSymbol = symbol;
     this.send({ type: 'chart', symbol });
     this.scheduleFlush();
+  }
+
+  /** Symbol whose live order book the heatmap wants (bus 'book' / 'bookRow' events), or null. */
+  setBookSymbol(symbol: string | null): void {
+    if (symbol === this.bookSymbol) return;
+    this.bookSymbol = symbol;
+    this.send({ type: 'book', symbol });
   }
 
   disconnect(): void {

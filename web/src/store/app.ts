@@ -23,8 +23,6 @@ import { DEFAULT_SETTINGS } from '@shared/journal';
 import { api, errorMessage } from '@/api/client';
 import { useMarket } from './market';
 
-export const positionKey = (accountId: string, symbol: string) => `${accountId}|${symbol}`;
-
 const MAX_RECENT = 300;
 
 interface AppState {
@@ -41,7 +39,7 @@ interface AppState {
   presets: ChallengePreset[];
   accounts: Record<string, Account>;
   snapshots: Record<string, AccountSnapshot>;
-  /** Keyed by positionKey(accountId, symbol). */
+  /** Open positions by id (= trade id). An account can hold several in one symbol. */
   positions: Record<string, Position>;
   /** Working orders only, by id. */
   orders: Record<string, Order>;
@@ -112,7 +110,7 @@ export const useApp = create<AppState>((set, get) => ({
         presets: b.presets,
         accounts,
         snapshots: Object.fromEntries(b.snapshots.map((x) => [x.accountId, x])),
-        positions: Object.fromEntries(b.positions.map((p) => [positionKey(p.accountId, p.symbol), p])),
+        positions: Object.fromEntries(b.positions.map((p) => [p.tradeId, p])),
         orders: Object.fromEntries(b.orders.filter((o) => o.status === 'working').map((o) => [o.id, o])),
         openTrades: Object.fromEntries(b.openTrades.map((t) => [t.id, t])),
         events: b.events,
@@ -150,12 +148,12 @@ export const useApp = create<AppState>((set, get) => ({
         });
         return;
       case 'position':
-        set((s) => ({ positions: { ...s.positions, [positionKey(msg.position.accountId, msg.position.symbol)]: msg.position } }));
+        set((s) => ({ positions: { ...s.positions, [msg.position.tradeId]: msg.position } }));
         return;
       case 'position_closed':
         set((s) => {
           const positions = { ...s.positions };
-          delete positions[positionKey(msg.accountId, msg.symbol)];
+          delete positions[msg.tradeId];
           return { positions };
         });
         return;

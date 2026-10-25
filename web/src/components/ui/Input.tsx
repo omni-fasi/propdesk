@@ -3,7 +3,10 @@ import clsx from 'clsx';
 import { decimalsOf } from '@shared/risk';
 
 const box =
-  'w-full rounded-md border border-line-strong bg-panel-2 text-fg placeholder:text-faint transition-colors hover:border-[#3a3a3a] focus:border-fg/60 focus:outline-none disabled:opacity-50';
+  'rounded-md border border-line-strong bg-panel-2 text-fg placeholder:text-faint transition-colors hover:border-[#3a3a3a] focus:border-fg/60 focus:outline-none disabled:opacity-50';
+
+/** Full width unless the caller sets its own width class (`w-40`, `w-[220px]`…). */
+const widthOf = (className?: string) => (className && /(^|\s)w-/.test(className) ? undefined : 'w-full');
 
 export interface FieldProps {
   label?: ReactNode;
@@ -13,27 +16,29 @@ export interface FieldProps {
   children: ReactNode;
   /** Label to the left (settings rows). */
   inline?: boolean;
+  /** 'div' when the control is not a single input (segmented controls, button groups) so label clicks don't press a button. */
+  as?: 'label' | 'div';
 }
 
-export function Field({ label, hint, error, className, children, inline }: FieldProps) {
+export function Field({ label, hint, error, className, children, inline, as: Tag = 'label' }: FieldProps) {
   if (inline) {
     return (
-      <label className={clsx('flex items-center justify-between gap-6 py-2', className)}>
+      <Tag className={clsx('flex items-center justify-between gap-6 py-2', className)}>
         <span className="min-w-0">
           <span className="block text-sm text-fg">{label}</span>
           {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
           {error && <span className="mt-0.5 block text-xs text-loss">{error}</span>}
         </span>
         <span className="shrink-0">{children}</span>
-      </label>
+      </Tag>
     );
   }
   return (
-    <label className={clsx('flex min-w-0 flex-col gap-1', className)}>
+    <Tag className={clsx('flex min-w-0 flex-col gap-1', className)}>
       {label && <span className="text-xs font-medium text-muted">{label}</span>}
       {children}
       {error ? <span className="text-xs text-loss">{error}</span> : hint ? <span className="text-xs text-faint">{hint}</span> : null}
-    </label>
+    </Tag>
   );
 }
 
@@ -50,7 +55,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input({ s
       {prefix && <span className="pointer-events-none absolute left-2.5 text-sm text-faint">{prefix}</span>}
       <input
         ref={ref}
-        className={clsx(box, size === 'sm' ? 'h-7 px-2 text-[13px]' : 'h-8 px-2.5 text-sm', prefix != null && 'pl-6', suffix != null && 'pr-10', invalid && 'border-loss/70')}
+        className={clsx(box, 'w-full', size === 'sm' ? 'h-7 px-2 text-[13px]' : 'h-8 px-2.5 text-sm', prefix != null && 'pl-6', suffix != null && 'pr-10', invalid && 'border-loss/70')}
         {...rest}
       />
       {suffix && <span className="pointer-events-none absolute right-2.5 text-xs text-faint">{suffix}</span>}
@@ -128,7 +133,7 @@ export function NumberInput({ value, onChange, step = 1, min, max, precision, st
 }
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea({ className, ...rest }, ref) {
-  return <textarea ref={ref} className={clsx(box, 'min-h-20 resize-y px-2.5 py-2 text-sm leading-relaxed', className)} {...rest} />;
+  return <textarea ref={ref} className={clsx(box, widthOf(className), 'min-h-20 resize-y px-2.5 py-2 text-sm leading-relaxed', className)} {...rest} />;
 });
 
 export interface SelectOption<T extends string> {
@@ -149,7 +154,7 @@ export function Select<T extends string>({ value, onChange, options, size = 'md'
     <select
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
-      className={clsx(box, 'cursor-pointer appearance-none bg-[length:12px] bg-[right_8px_center] bg-no-repeat pr-7', size === 'sm' ? 'h-7 px-2 text-[13px]' : 'h-8 px-2.5 text-sm', className)}
+      className={clsx(box, widthOf(className), 'cursor-pointer appearance-none bg-[length:12px] bg-[right_8px_center] bg-no-repeat pr-7', size === 'sm' ? 'h-7 px-2 text-[13px]' : 'h-8 px-2.5 text-sm', className)}
       style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3a3a3' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")" }}
       {...rest}
     >

@@ -33,6 +33,11 @@ export interface InstrumentSpec {
   provider: FeedProvider;
   /** Symbol at the provider ('NQ=F', 'BTCUSDT'). Several app symbols may share one feed (NQ and MNQ). */
   feedSymbol: string;
+  /**
+   * Real-time stand-in for a delayed feed: the price moves with this Binance perpetual (provider symbol),
+   * scaled to the feed's own price and re-anchored to it every minute (CME futures via Yahoo are ~10 min late).
+   */
+  liveProxy?: { feed: string; label: string };
   session: SessionKind;
   quoteModel: QuoteModel;
   /** For quoteModel 'last': synthesized spread in ticks (futures use the tick rule, see SPEC.md). */
@@ -135,6 +140,8 @@ export interface ZonedTime {
   tz: string;
 }
 
+export type FeesMode = 'real' | 'off';
+
 export interface AccountRules {
   startingBalance: number;
   profitTarget: number | null;
@@ -149,6 +156,8 @@ export interface AccountRules {
   maxContracts: number | null;
   /** Leverage per asset class for margin (notional / leverage). Missing class = 1:1. null = no margin check. */
   leverage: Partial<Record<AssetClass, number>> | null;
+  /** Commissions on fills: 'real' (each instrument's schedule; also when missing) or 'off' (practice accounts only). */
+  fees?: FeesMode;
   /** null = every asset class allowed. */
   allowedClasses: AssetClass[] | null;
   /** Mon–Fri auto-flatten of futures positions (and cancel of futures orders) at this time. */
@@ -206,6 +215,15 @@ export interface AccountLock {
   until: number | null;
   message: string;
 }
+
+/** The calendar flag a lock leaves on its trading day. */
+export const LOCK_FLAGS: Record<LockReason, DailyStat['flags'][number]> = {
+  daily_loss: 'daily_loss',
+  tilt_cooldown: 'tilt',
+  max_trades: 'locked',
+  personal_loss_limit: 'locked',
+  break: 'break',
+};
 
 export interface Account {
   id: string;
@@ -311,6 +329,11 @@ export interface Order {
   rejectReason: string | null;
 }
 
+/**
+ * One open position = one open trade (`tradeId` is its id). An account can hold several positions in a
+ * symbol, always on the same side: every entry opens its own, with its own stop-loss / take-profit, and
+ * orders the other way close them oldest first (the rest opens a new position on the other side).
+ */
 export interface Position {
   accountId: string;
   symbol: string;
@@ -318,10 +341,11 @@ export interface Position {
   qty: number;
   avgPrice: number;
   openedAt: number;
-  /** Stop-loss price for the whole position (stop-market), or null. */
+  /** Stop-loss price of this position (stop-market), or null. */
   sl: number | null;
-  /** Take-profit price for the whole position (limit), or null. */
+  /** Take-profit price of this position (limit), or null. */
   tp: number | null;
+  /** Id of the position's trade — also the position's id. */
   tradeId: string;
   /** Mark used for openPnl: bid for longs, ask for shorts. */
   markPrice: number;
@@ -346,6 +370,43 @@ export interface Fill {
   tradeId: string;
 }
 
+/** A price sample for trade replays: [time ms, bid, ask] (bid = ask when rebuilt from exchange prints or bars). */
+export type TickSample = [t: number, bid: number, ask: number];
+
+// ───────────────────────────── Order book (liquidity heatmap) ─────────────────────────────
+
+/** Resting size in one price bucket: [index, qty]; the bucket covers [index × step, (index + 1) × step). */
+export type BookLevel = [index: number, qty: number];
+
+/** A symbol's live order book (Binance markets only), bucketed within a range around the mid price. */
+export interface BookFrame {
+  symbol: string;
+  /** ms */
+  ts: number;
+  step: number;
+  mid: number;
+  /** Buy orders waiting (index ascending). */
+  bids: BookLevel[];
+  /** Sell orders waiting (index ascending). */
+  asks: BookLevel[];
+}
+
+/** One minute of the heatmap: the average size resting in each bucket during that minute. */
+export interface BookRow {
+  /** Minute start, unix seconds. */
+  t: number;
+  step: number;
+  bids: BookLevel[];
+  asks: BookLevel[];
+}
+
+/** A position's stop-loss / take-profit from `ts` on (null = none). */
+export interface BracketChange {
+  ts: number;
+  sl: number | null;
+  tp: number | null;
+}
+
 export type ExitReason =
   | 'manual'
   | 'stop_loss'
@@ -357,7 +418,7 @@ export type ExitReason =
   | 'auto_flatten'
   | 'passed';
 
-/** A round trip: from flat to flat (scale-ins/outs included). A flip closes one trade and opens another. */
+/** One position from open to close (partial closes included). An order that flips the side closes the old positions' trades and opens a new one. */
 export interface Trade {
   id: string;
   accountId: string;
@@ -454,14 +515,41 @@ export interface DailyStat {
   fills: number;
   highEquity: number;
   lowEquity: number;
-  /** Something notable happened (breach, lock, pass...). */
-  flags: Array<'breach' | 'daily_loss' | 'locked' | 'passed' | 'payout' | 'tilt'>;
+  /** Something notable happened (breach, lock, break, pass...). */
+  flags: Array<'breach' | 'daily_loss' | 'locked' | 'break' | 'passed' | 'payout' | 'tilt'>;
 }
 
 export interface EquityPoint {
   ts: number;
   balance: number;
   equity: number;
+}
+
+// ───────────────────────────── Chart drawings ─────────────────────────────
+
+/** trendline: two points · hline: a price across the chart · hray: from a point to the right · rect: a box
+ *  · long / short: position tool (entry with stop-loss and take-profit zones). */
+export type DrawingKind = 'trendline' | 'hline' | 'hray' | 'rect' | 'long' | 'short';
+export const DRAWING_KINDS: readonly DrawingKind[] = ['trendline', 'hline', 'hray', 'rect', 'long', 'short'];
+
+export interface DrawingPoint {
+  /** Unix seconds. */
+  time: number;
+  price: number;
+}
+
+/** A drawing on a symbol's chart, shown on every timeframe. */
+export interface Drawing {
+  id: string;
+  symbol: string;
+  kind: DrawingKind;
+  /** trendline / rect: 2 · hline / hray: 1 · long / short: the entry, then the right edge (same price). */
+  points: DrawingPoint[];
+  /** long / short: take-profit and stop-loss prices (null for the other kinds). */
+  tp: number | null;
+  sl: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ───────────────────────────── Events, wallet, settings ─────────────────────────────
@@ -540,6 +628,13 @@ export interface TiltSettings {
   personalDailyLoss: number | null;
 }
 
+/** TradingView's execution sounds (Settings → Trading → Execution sound), in its menu order — also its classic alert sounds. */
+export const TV_SOUNDS = ['fired', '3_notes_reverb', 'alarm_clock', 'beep_beep', 'calling', 'chirpy', 'fault', 'hand_bell'] as const;
+export type TvSound = (typeof TV_SOUNDS)[number];
+/** What a fill plays: the "Order filled" voice clip or one of TradingView's execution sounds. */
+export const FILL_SOUNDS = ['order_filled', ...TV_SOUNDS] as const;
+export type FillSound = (typeof FILL_SOUNDS)[number];
+
 export interface Settings {
   onboarded: boolean;
   traderName: string | null;
@@ -547,6 +642,10 @@ export interface Settings {
   hourlyWage: number | null;
   showWorkHours: boolean;
   sounds: boolean;
+  /** Played on every fill (entry, exit, stop, target), like TradingView's execution sound. */
+  fillSound: FillSound;
+  /** TradingView alert sound for account alerts (risk warnings, breach, locks, pass, payout); null = silent. */
+  alertSound: TvSound | null;
   /** 0..1 */
   volume: number;
   /** Desktop notifications for fills / stops / breaches while the window is hidden. */

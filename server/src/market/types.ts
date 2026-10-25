@@ -1,6 +1,6 @@
 // Contract between the market-data layer (server/src/market/**) and the rest of the server.
 
-import type { Candle, FeedStatus, InstrumentSpec, Quote, Timeframe } from '../../../shared/types.ts';
+import type { BookFrame, BookRow, Candle, FeedStatus, InstrumentSpec, Quote, Timeframe } from '../../../shared/types.ts';
 
 export interface Logger {
   debug(msg: string, ...args: unknown[]): void;
@@ -38,6 +38,11 @@ export interface MarketHub {
   getCandles(symbol: string, tf: Timeframe, opts?: { endSec?: number; limit?: number }): Promise<Candle[]>;
   /** 1m candles covering [fromMs, toMs], oldest first — used to reconcile orders/rules over a gap. */
   getHistory1m(symbol: string, fromMs: number, toMs: number): Promise<Candle[]>;
+  /**
+   * Exchange trade prints in [fromMs, toMs] (app time), oldest first — trade replays. null when the provider
+   * has no trade history or the window holds more than `maxPrints`. Optional.
+   */
+  getTrades?(symbol: string, fromMs: number, toMs: number, maxPrints: number): Promise<Array<{ ts: number; price: number }> | null>;
   /** Fired after data resumes following a suspend / disconnect longer than ~5 s. */
   onGap(cb: (gap: MarketGap) => void): () => void;
   getFeedStatus(): FeedStatus[];
@@ -49,4 +54,20 @@ export interface MarketHubOptions {
   log: Logger;
   /** Directory for optional on-disk caches. */
   cacheDir?: string;
+}
+
+/** Order book liquidity for the chart heatmap (Binance markets only). */
+export interface DepthSource {
+  start(): void;
+  stop(): void;
+  /** Symbols recorded all the time (the heatmap's history); others only while watched. */
+  setRecorded(symbols: Iterable<string>): void;
+  /** `owner` (a websocket client) wants live frames of `symbol` (null = none). */
+  watch(owner: string, symbol: string | null): void;
+  onFrame(fn: (frame: BookFrame) => void): () => void;
+  onRow(fn: (symbol: string, row: BookRow) => void): () => void;
+  /** Stored heatmap minutes with from ≤ t ≤ to (seconds), oldest first. */
+  rows(symbol: string, fromSec: number, toSec: number): BookRow[];
+  /** The order book is available for this symbol (a Binance market). */
+  supports(symbol: string): boolean;
 }

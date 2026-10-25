@@ -40,6 +40,11 @@ export function fmtPct(fraction: number, digits = 1, sign = false): string {
   return `${prefix}${s}%`;
 }
 
+/** 10 → '10×', 2.5 → '2.5×' (leverage: position value per $1 of account). */
+export function fmtLeverage(leverage: number): string {
+  return `${Number(leverage.toFixed(2))}×`;
+}
+
 export function fmtNumber(n: number, decimals = 2): string {
   if (!Number.isFinite(n)) return '—';
   const s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -86,7 +91,7 @@ export function fmtCountdown(ms: number): string {
 
 /** Hours of work an amount represents at an hourly wage, or null. */
 export function workHours(amount: number, hourlyWage: number | null | undefined): number | null {
-  if (!hourlyWage || hourlyWage <= 0 || !Number.isFinite(amount)) return null;
+  if (!hourlyWage || hourlyWage <= 0 || !Number.isFinite(amount) || Math.abs(amount) < 0.005) return null;
   return Math.abs(amount) / hourlyWage;
 }
 

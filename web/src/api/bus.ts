@@ -2,7 +2,7 @@
 // The store holds state; the bus is for reacting to *changes* (sounds, flashes, modals, chart updates).
 
 import { useEffect, useRef } from 'react';
-import type { AccountEvent, AccountSnapshot, Candle, Fill, Order, Position, Trade } from '@shared/types';
+import type { AccountEvent, AccountSnapshot, BookFrame, BookRow, Candle, Fill, Order, Position, Trade } from '@shared/types';
 
 export interface BusEvents {
   fill: Fill;
@@ -15,8 +15,11 @@ export interface BusEvents {
   event: AccountEvent;
   /** Live 1m candle for the chart symbol. */
   candle: { symbol: string; candle: Candle };
+  /** Live order book of the heatmap symbol (~1/s) and its finished minutes. */
+  book: BookFrame;
+  bookRow: { symbol: string; row: BookRow };
   position: Position;
-  positionClosed: { accountId: string; symbol: string };
+  positionClosed: { accountId: string; symbol: string; tradeId: string };
   snapshot: AccountSnapshot;
   connection: { connected: boolean };
   /** State was re-bootstrapped after a reconnect. */

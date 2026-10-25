@@ -1,6 +1,6 @@
 // Pure trading math shared by the engine and the order ticket.
 
-import type { CommissionModel, InstrumentSpec, Side } from './types.ts';
+import type { AccountRules, CommissionModel, InstrumentSpec, Side } from './types.ts';
 
 export function round2(x: number): number {
   return Math.round((x + Number.EPSILON) * 100) / 100;
@@ -14,20 +14,22 @@ export function decimalsOf(step: number): number {
   return i === -1 ? 0 : s.length - i - 1;
 }
 
+/** x / step with binary floating-point dust removed (1.162345 / 0.00001 → 116234.5, not 116234.4999…). */
+function steps(x: number, step: number): number {
+  return Number((x / step).toPrecision(12));
+}
+
 /** Round to the nearest multiple of `step`, without floating-point dust. */
 export function roundToStep(x: number, step: number): number {
-  const d = decimalsOf(step);
-  return Number((Math.round(x / step) * step).toFixed(d));
+  return Number((Math.round(steps(x, step)) * step).toFixed(decimalsOf(step)));
 }
 
 export function floorToStep(x: number, step: number): number {
-  const d = decimalsOf(step);
-  return Number((Math.floor(x / step + 1e-9) * step).toFixed(d));
+  return Number((Math.floor(steps(x, step)) * step).toFixed(decimalsOf(step)));
 }
 
 export function ceilToStep(x: number, step: number): number {
-  const d = decimalsOf(step);
-  return Number((Math.ceil(x / step - 1e-9) * step).toFixed(d));
+  return Number((Math.ceil(steps(x, step)) * step).toFixed(decimalsOf(step)));
 }
 
 export function roundPrice(spec: InstrumentSpec, price: number): number {
@@ -64,6 +66,14 @@ export function commissionFor(model: CommissionModel, spec: InstrumentSpec, qty:
   if (model.kind === 'per_contract') return round2(Math.abs(qty) * model.perSide);
   const rate = liquidity === 'maker' ? model.maker : model.taker;
   return round2(notional(spec, qty, price) * rate);
+}
+
+/** No commission at all: practice accounts with trading fees switched off. */
+export const NO_COMMISSION: CommissionModel = { kind: 'per_contract', perSide: 0 };
+
+/** The commission schedule an account pays on `spec`. */
+export function accountCommission(rules: Pick<AccountRules, 'fees'>, spec: InstrumentSpec): CommissionModel {
+  return rules.fees === 'off' ? NO_COMMISSION : spec.commission;
 }
 
 /** Estimated round-trip commission (entry taker + exit taker). */

@@ -9,8 +9,6 @@ const futures: FutDef[] = [
   ['NQ', 'E-mini Nasdaq-100', 'NQ=F', 0.25, 20, 2.25, 1, 2, 'Index futures', '$5 per tick · $20 per point'],
   ['MES', 'Micro E-mini S&P 500', 'ES=F', 0.25, 5, 0.62, 0.1, 2, 'Index futures', '$1.25 per tick · $5 per point'],
   ['ES', 'E-mini S&P 500', 'ES=F', 0.25, 50, 2.25, 1, 2, 'Index futures', '$12.50 per tick · $50 per point'],
-  ['MYM', 'Micro E-mini Dow', 'YM=F', 1, 0.5, 0.62, 0.1, 0, 'Index futures', '$0.50 per tick · $0.50 per point'],
-  ['YM', 'E-mini Dow', 'YM=F', 1, 5, 2.25, 1, 0, 'Index futures', '$5 per tick · $5 per point'],
   ['M2K', 'Micro E-mini Russell 2000', 'RTY=F', 0.1, 5, 0.62, 0.1, 1, 'Index futures', '$0.50 per tick · $5 per point'],
   ['RTY', 'E-mini Russell 2000', 'RTY=F', 0.1, 50, 2.25, 1, 1, 'Index futures', '$5 per tick · $50 per point'],
   ['MCL', 'Micro WTI Crude Oil', 'CL=F', 0.01, 100, 0.75, 0.1, 2, 'Energy & metals futures', '$1 per tick · $100 per $1 move'],
@@ -18,6 +16,18 @@ const futures: FutDef[] = [
   ['MGC', 'Micro Gold', 'GC=F', 0.1, 10, 0.75, 0.1, 1, 'Energy & metals futures', '$1 per tick · $10 per $1 move'],
   ['GC', 'Gold', 'GC=F', 0.1, 100, 2.5, 1, 1, 'Energy & metals futures', '$10 per tick · $100 per $1 move'],
 ];
+
+/**
+ * Yahoo's CME prices are ~10 min late; these Binance perpetuals track the same markets in real time and
+ * drive the futures live (the Dow has no perpetual that tracks it closely enough, so it is not offered).
+ */
+const LIVE_PROXY: Record<string, { feed: string; label: string }> = {
+  'NQ=F': { feed: 'QQQUSDT', label: 'QQQ' },
+  'ES=F': { feed: 'SPYUSDT', label: 'SPY' },
+  'RTY=F': { feed: 'IWMUSDT', label: 'IWM' },
+  'CL=F': { feed: 'CLUSDT', label: 'WTI oil' },
+  'GC=F': { feed: 'XAUUSDT', label: 'gold' },
+};
 
 type PerpDef = [symbol: string, name: string, feed: string, cls: AssetClass, tick: number, step: number, pp: number, qp: number, unit: string, defaultQty: number, group: string];
 
@@ -57,6 +67,7 @@ export const INSTRUMENTS: InstrumentSpec[] = [
     group,
     provider: 'yahoo',
     feedSymbol: feed,
+    liveProxy: LIVE_PROXY[feed],
     session: 'cme',
     quoteModel: 'last',
     syntheticSpreadTicks: 1,
@@ -137,3 +148,50 @@ export const ASSET_CLASS_LABELS: Record<AssetClass, string> = {
   stocks: 'Stocks & ETFs',
   forex: 'Forex',
 };
+
+const TV_FUTURES: Record<string, string> = {
+  MNQ: 'CME_MINI:MNQ1!',
+  NQ: 'CME_MINI:NQ1!',
+  MES: 'CME_MINI:MES1!',
+  ES: 'CME_MINI:ES1!',
+  M2K: 'CME_MINI:M2K1!',
+  RTY: 'CME_MINI:RTY1!',
+  MCL: 'NYMEX:MCL1!',
+  CL: 'NYMEX:CL1!',
+  MGC: 'COMEX:MGC1!',
+  GC: 'COMEX:GC1!',
+};
+
+export interface PriceSource {
+  /** Short label for the chart header ("Binance perpetual"). */
+  label: string;
+  /** The same market on TradingView, when it lists it. */
+  tradingView: string | null;
+  /** Why another site can show a different price. */
+  note: string;
+}
+
+/** Where an instrument's price comes from, and what to compare it with elsewhere. */
+export function priceSource(spec: InstrumentSpec): PriceSource {
+  if (spec.provider === 'binance') {
+    return {
+      label: 'Binance perpetual',
+      tradingView: spec.assetClass === 'crypto' ? `BINANCE:${spec.feedSymbol}.P` : null,
+      note: `Live price of Binance's ${spec.feedSymbol} perpetual futures. Spot markets (Coinbase, Binance spot) trade a few cents to a few dollars apart, so their price differs a little.`,
+    };
+  }
+  if (spec.assetClass === 'futures') {
+    return {
+      label: spec.liveProxy ? 'CME · live' : 'CME via Yahoo',
+      tradingView: TV_FUTURES[spec.symbol] ?? null,
+      note: spec.liveProxy
+        ? `Free CME data arrives about 10 minutes late, so the price moves live with Binance's ${spec.liveProxy.label} perpetual (it tracks this market in real time) and is re-anchored to the real CME price every minute. It usually sits within a few ticks of the real-time CME price.`
+        : "Yahoo's free CME data usually arrives about 10 minutes late. PropDesk measures the delay and replays the prices as if live, so a real-time chart runs that much ahead.",
+    };
+  }
+  return {
+    label: 'Forex via Yahoo',
+    tradingView: `FX:${spec.symbol}`,
+    note: 'Forex has no single exchange: every provider quotes slightly different prices, a few pips apart.',
+  };
+}

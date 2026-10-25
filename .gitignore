@@ -3,3 +3,7 @@ web/dist
 *.db
 *.db-*
 .data
+
+# Trading sounds belong to TradingView / their authors: personal use only, never published.
+web/public/sounds/
+scripts/fetch-platform-sounds.sh

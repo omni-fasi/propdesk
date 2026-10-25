@@ -45,7 +45,7 @@ export function StatusBadge({ status, size }: { status: AccountStatus; size?: 'x
   );
 }
 
-const KIND: Record<AccountKind, string> = { practice: 'Practice', evaluation: 'Evaluation', funded: 'Funded' };
+const KIND: Record<AccountKind, string> = { practice: 'Live', evaluation: 'Evaluation', funded: 'Funded' };
 
 export function KindBadge({ kind, phase, phaseCount, size }: { kind: AccountKind; phase?: number; phaseCount?: number; size?: 'xs' | 'sm' | 'md' }) {
   const label = kind === 'evaluation' && phaseCount && phaseCount > 1 ? `Phase ${phase}/${phaseCount}` : KIND[kind];

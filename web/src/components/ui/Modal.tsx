@@ -4,18 +4,30 @@ import clsx from 'clsx';
 import { X } from 'lucide-react';
 import { IconButton } from './Button';
 
+// Open overlays in opening order: only the top-most one reacts to Escape (stacked drawer + modal).
+const overlayStack: number[] = [];
+let overlaySeq = 0;
+
 function useEscape(open: boolean, onClose: (() => void) | undefined) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    if (!open || !onClose) return;
+    if (!open) return;
+    const id = ++overlaySeq;
+    overlayStack.push(id);
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
+      if (e.key !== 'Escape' || overlayStack[overlayStack.length - 1] !== id) return;
+      // Non-dismissible overlays still swallow Escape so the one underneath doesn't close.
+      e.stopPropagation();
+      onCloseRef.current?.();
     };
     window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [open, onClose]);
+    return () => {
+      window.removeEventListener('keydown', h);
+      const i = overlayStack.indexOf(id);
+      if (i !== -1) overlayStack.splice(i, 1);
+    };
+  }, [open]);
 }
 
 /** Focus the first focusable element inside `ref` when opened. */

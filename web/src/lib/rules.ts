@@ -2,7 +2,7 @@
 
 import type { Account, AccountRules, AccountSnapshot, DrawdownMode } from '@shared/types';
 import { ASSET_CLASS_LABELS } from '@shared/instruments';
-import { fmtMoney, fmtPct } from '@shared/format';
+import { fmtLeverage, fmtMoney, fmtPct } from '@shared/format';
 
 export const DRAWDOWN_LABELS: Record<DrawdownMode, { short: string; long: string }> = {
   static: { short: 'Static', long: 'Static — the failure level never moves' },
@@ -32,10 +32,11 @@ export function rulesSummary(r: AccountRules): string[] {
   if (r.maxContracts != null) out.push(`Max ${r.maxContracts} contracts (${r.maxContracts * 10} micros)`);
   if (r.leverage) {
     const lev = Object.entries(r.leverage)
-      .map(([k, v]) => `${ASSET_CLASS_LABELS[k as keyof typeof ASSET_CLASS_LABELS]} 1:${v}`)
+      .map(([k, v]) => `${ASSET_CLASS_LABELS[k as keyof typeof ASSET_CLASS_LABELS]} ${fmtLeverage(v)}`)
       .join(' · ');
     if (lev) out.push(`Leverage ${lev}`);
   }
+  if (r.fees === 'off') out.push('No trading fees (switched off on this account)');
   out.push(r.allowedClasses ? `Markets: ${r.allowedClasses.map((c) => ASSET_CLASS_LABELS[c]).join(', ')}` : 'All markets');
   if (r.flatBy) out.push(`Futures auto-flattened at ${fmtZoned(r.flatBy)}`);
   if (r.noWeekendHolding) out.push('No holding over the weekend');

@@ -48,7 +48,7 @@ export function AccountSwitcher() {
       {(close) => (
         <div className="flex flex-col">
           <div className="max-h-[60vh] overflow-auto">
-            {accounts.length === 0 && <div className="px-3 py-4 text-center text-sm text-muted">Create a challenge or a practice account to start trading.</div>}
+            {accounts.length === 0 && <div className="px-3 py-4 text-center text-sm text-muted">Create a challenge or a live account to start trading.</div>}
             {accounts.map((a) => {
               const s = snapshots[a.id];
               return (

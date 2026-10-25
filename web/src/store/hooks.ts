@@ -46,6 +46,33 @@ export function useAccountPositions(accountId: string | null | undefined): Posit
   );
 }
 
+/**
+ * An account's positions in one symbol seen as one (they are always on the same side): total size, average
+ * entry, summed P&L; a stop / target only when they all share it. null when flat.
+ */
+export function combinePositions(list: readonly Position[]): Position | null {
+  if (list.length <= 1) return list[0] ?? null;
+  let qty = 0;
+  let cost = 0;
+  let openPnl = 0;
+  for (const p of list) {
+    qty += p.qty;
+    cost += p.avgPrice * Math.abs(p.qty);
+    openPnl += p.openPnl;
+  }
+  const shared = (k: 'sl' | 'tp') => (list.every((p) => p[k] === list[0][k]) ? list[0][k] : null);
+  const abs = Math.abs(qty);
+  return {
+    ...list[0],
+    qty: Number(qty.toFixed(10)),
+    avgPrice: abs > 0 ? cost / abs : list[0].avgPrice,
+    openPnl,
+    sl: shared('sl'),
+    tp: shared('tp'),
+    openedAt: Math.min(...list.map((p) => p.openedAt)),
+  };
+}
+
 /** Working orders of an account, newest first. */
 export function useAccountOrders(accountId: string | null | undefined): Order[] {
   const orders = useApp((s) => s.orders);

@@ -6,7 +6,7 @@
 //   GET    /candles?symbol&tf&end&limit        → Candle[]   end = SECONDS (exclusive, default now), limit ≤ 1500 (default 500)
 //   GET    /quotes                             → Quote[]
 //   POST   /accounts                  CreateAccountRequest → Account
-//   PATCH  /accounts/:id              UpdateAccountRequest → Account          (name / archived only)
+//   PATCH  /accounts/:id              UpdateAccountRequest → Account          (name / archived / practice fees)
 //   POST   /accounts/:id/flatten                → OkResponse                  close all positions + cancel all orders
 //   POST   /accounts/:id/break        BreakRequest → Account                  voluntary lock ("take a break")
 //   POST   /accounts/:id/retry                  → Account                     new attempt of a failed evaluation (pays resetFee)
@@ -16,15 +16,21 @@
 //   POST   /orders                    PlaceOrderRequest → Order               rejected orders return 400 with ApiError
 //   PATCH  /orders/:id                ModifyOrderRequest → Order
 //   DELETE /orders/:id                          → Order
-//   POST   /positions/close           ClosePositionRequest → OkResponse
-//   POST   /positions/reverse         ReversePositionRequest → OkResponse
-//   PATCH  /positions/bracket         SetBracketRequest → Position
+//   POST   /positions/close           ClosePositionRequest → OkResponse       one position (tradeId) or all of a symbol
+//   POST   /positions/reverse         ReversePositionRequest → OkResponse     all positions of the symbol → one on the other side
+//   PATCH  /positions/bracket         SetBracketRequest → Position[]          the positions it changed
 //   GET    /trades?accountId&from&to&symbol&status&limit&offset → Trade[]   (newest first)
 //   PATCH  /trades/:id                UpdateTradeRequest → Trade              journal fields only
+//   GET    /trades/:id/replay                   → TradeReplay                 prices, fills and stop/target changes to replay a trade
 //   GET    /fills?accountId&from&to             → Fill[]                      (newest first)
 //   GET    /daily?accountId&from&to             → DailyStat[]                 from/to = day keys inclusive
 //   GET    /equity?accountId&from&to            → EquityPoint[]               (oldest first)
-//   GET    /events?accountId&limit&before       → AccountEvent[]              (newest first)
+//   GET    /events?accountId&limit&from&before  → AccountEvent[]              (newest first)
+//   GET    /book?symbol&from&to                 → BookRow[]                   order book heatmap minutes (from/to = SECONDS; oldest first)
+//   GET    /drawings?symbol                     → Drawing[]                   (oldest first)
+//   PUT    /drawings/:id      PutDrawingRequest → Drawing                     (create or replace)
+//   DELETE /drawings/:id                        → { ok: true }
+//   DELETE /drawings?symbol                     → { deleted: number }
 //   GET    /notes?from&to                       → DayNote[]
 //   PUT    /notes/:day                PutNoteRequest → DayNote
 //   GET    /wallet                              → WalletResponse
@@ -43,10 +49,15 @@ import type {
   AccountEvent,
   AccountRules,
   AccountSnapshot,
+  BookFrame,
+  BookRow,
+  BracketChange,
   Candle,
   ChallengePreset,
   DayNote,
+  Drawing,
   FeedStatus,
+  FeesMode,
   Fill,
   InstrumentSpec,
   Mood,
@@ -56,6 +67,7 @@ import type {
   Quote,
   Settings,
   Side,
+  TickSample,
   Trade,
   TradeReview,
   TradeTags,
@@ -64,6 +76,28 @@ import type {
 } from './types.ts';
 
 // Query parameters (all optional unless noted). accountId: an account id or 'all' (default 'all').
+/** Where a replay's prices come from. */
+export type ReplaySource = 'recorded' | 'exchange' | 'bars';
+
+export interface TradeReplay {
+  trade: Trade;
+  /** The trade's fills, oldest first (including a flip's closing fill). */
+  fills: Fill[];
+  /** Stop / target over time, oldest first. */
+  brackets: BracketChange[];
+  /** false: the trade predates bracket recording — rebuilt from the initial stop and how the trade ended. */
+  bracketsRecorded: boolean;
+  /** Replay window (ms). */
+  from: number;
+  to: number;
+  /** recorded: PropDesk's own bid/ask samples · exchange: rebuilt from the exchange's trade prints · bars: 1-minute bars only. */
+  source: ReplaySource;
+  /** Price samples in [from, to], oldest first (empty for 'bars'). */
+  ticks: TickSample[];
+  /** 1-minute bars covering [from, to]: context around the ticks, and the whole replay for 'bars'. */
+  bars: Candle[];
+}
+
 export interface TradesQuery {
   accountId?: string;
   /** ms; matches trades closed (or opened, if still open) in [from, to]. */
@@ -98,6 +132,8 @@ export interface EventsQuery {
   accountId?: string;
   /** default 100 */
   limit?: number;
+  /** ms, inclusive. */
+  from?: number;
   /** ms, exclusive — for paging older events. */
   before?: number;
 }
@@ -147,12 +183,16 @@ export interface CreateAccountRequest {
   fee?: number;
   /** Practice account starting balance (default 50,000). */
   startingBalance?: number;
+  /** Practice accounts only: 'off' = no trading fees (default 'real'). */
+  fees?: FeesMode;
   name?: string;
 }
 
 export interface UpdateAccountRequest {
   name?: string;
   archived?: boolean;
+  /** Practice accounts only: switch trading fees off / back on for future fills. */
+  fees?: FeesMode;
 }
 
 export interface BreakRequest {
@@ -184,6 +224,8 @@ export interface ModifyOrderRequest {
 export interface ClosePositionRequest {
   accountId: string;
   symbol: string;
+  /** Only this position (its tradeId); omitted = every position in the symbol, oldest first. */
+  tradeId?: string;
   /** Partial close; omitted = close all. */
   qty?: number;
 }
@@ -196,6 +238,8 @@ export interface ReversePositionRequest {
 export interface SetBracketRequest {
   accountId: string;
   symbol: string;
+  /** Only this position (its tradeId); omitted = every position in the symbol. */
+  tradeId?: string;
   /** undefined = unchanged, null = remove. */
   sl?: number | null;
   tp?: number | null;
@@ -205,6 +249,8 @@ export interface UpdateTradeRequest {
   tags?: Partial<TradeTags>;
   review?: Omit<TradeReview, 'reviewedAt'> | null;
 }
+
+export type PutDrawingRequest = Pick<Drawing, 'symbol' | 'kind' | 'points' | 'tp' | 'sl'>;
 
 export interface PutNoteRequest {
   accountId?: string | null;
@@ -252,6 +298,8 @@ export type ClientMessage =
   | { type: 'subscribe'; symbols: string[] }
   /** Live 1m candle updates for the chart symbol (null = none). */
   | { type: 'chart'; symbol: string | null }
+  /** Live order book of a Binance symbol for the liquidity heatmap (null = none). */
+  | { type: 'book'; symbol: string | null }
   | { type: 'ping'; t: number };
 
 export type ServerMessage =
@@ -260,12 +308,16 @@ export type ServerMessage =
   | { type: 'quotes'; quotes: Quote[] }
   /** Live 1m candle for the client's chart symbol (same bar repeats while it is forming). */
   | { type: 'candle'; symbol: string; candle: Candle }
+  /** Live order book of the client's book symbol, about once a second. */
+  | { type: 'book'; frame: BookFrame }
+  /** A finished heatmap minute of the client's book symbol. */
+  | { type: 'book_row'; symbol: string; row: BookRow }
   /** Throttled (≤ ~4/s per account) + immediately after fills / status changes. */
   | { type: 'snapshot'; snapshot: AccountSnapshot }
   | { type: 'account'; account: Account }
   | { type: 'order'; order: Order }
   | { type: 'position'; position: Position }
-  | { type: 'position_closed'; accountId: string; symbol: string }
+  | { type: 'position_closed'; accountId: string; symbol: string; tradeId: string }
   | { type: 'fill'; fill: Fill }
   | { type: 'trade'; trade: Trade }
   | { type: 'event'; event: AccountEvent }

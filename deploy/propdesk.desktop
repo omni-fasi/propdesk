@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PropDesk
+GenericName=Paper Trading Terminal
+Comment=Prop-firm style paper trading with live prices, challenges and a P&L calendar
+Exec=%h/.local/bin/propdesk
+Icon=propdesk
+Terminal=false
+Categories=Office;Finance;
+Keywords=trading;paper;prop;futures;crypto;calendar;journal;
+StartupWMClass=PropDesk
